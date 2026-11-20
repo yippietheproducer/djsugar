@@ -2356,7 +2356,19 @@ if(APPLE)
     endif()
   endif()
 
-  option(AU_EFFECTS "Audio Unit (AU) effects integration" ON)
+  # deckx: the AU effects backend SIGSEGVs at launch on iOS 16.7 (while loading
+  # AUBandpassFilter), so it is only registered on iOS when explicitly requested.
+  option(
+    DECKX_IOS_AUDIOUNIT_EFFECTS
+    "Register the Audio Unit effects backend on iOS (crashes on iOS 16.7)"
+    OFF
+  )
+  if(IOS AND NOT DECKX_IOS_AUDIOUNIT_EFFECTS)
+    set(_AU_EFFECTS_DEFAULT OFF)
+  else()
+    set(_AU_EFFECTS_DEFAULT ON)
+  endif()
+  option(AU_EFFECTS "Audio Unit (AU) effects integration" ${_AU_EFFECTS_DEFAULT})
   if(AU_EFFECTS)
     target_sources(
       mixxx-lib
