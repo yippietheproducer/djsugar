@@ -160,3 +160,19 @@ jobs:
         with:
           name: ios-ipa-unsigned
           path: build/*.ipa
+
+      # resolvable crash addresses: unstripped copy of the main executable (symbol table + linker map if any)
+      - name: "Keep unstripped executable"
+        run: |
+          APP=$(find build -maxdepth 3 -name "*.app" -type d | head -1)
+          EXE="$APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")"
+          mkdir -p build/unstripped && cp "$EXE" build/unstripped/Mixxx.unstripped
+          nm -n build/unstripped/Mixxx.unstripped | gzip -1 > build/unstripped/Mixxx.nm.gz
+          ls -lh build/unstripped
+
+      - name: "Upload unstripped executable"
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-exe-unstripped
+          path: build/unstripped/*
+          retention-days: 14
