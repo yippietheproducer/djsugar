@@ -5,6 +5,9 @@
 #import <Foundation/Foundation.h>
 
 #include <execinfo.h>
+#include <mach-o/dyld.h>
+#include <ptrauth.h>
+#include <sys/ucontext.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
@@ -28,28 +31,38 @@ std::string documentsDir() {
     return std::string([dirs[0] UTF8String]);
 }
 
-// Only async-signal-safe calls: open/write/close/signal/raise/_exit and
-// backtrace()/backtrace_symbols_fd() (primed at install time).
-void crashHandler(int sig) {
+// Async-signal-safe only. backtrace() returns nothing on this build (frame pointers omitted),
+// so dump fault addr, pc/lr/sp/fp from the ucontext and walk the fp chain by hand.
+// Addresses are runtime; subtract the printed slide (image 0 = main binary) to get file offsets.
+void putHex(int fd, const char* tag, uint64_t v) {
+    char buf[48];
+    size_t n = 0;
+    for (const char* t = tag; *t; ++t) buf[n++] = *t;
+    buf[n++] = '0';
+    buf[n++] = 'x';
+    for (int sh = 60; sh >= 0; sh -= 4) buf[n++] = "0123456789abcdef"[(v >> sh) & 0xf];
+    buf[n++] = '\n';
+    write(fd, buf, n);
+}
+
+void crashHandler(int sig, siginfo_t* info, void* uc) {
     int fd = open(s_crashPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) {
-        char msg[32] = "signal ";
-        size_t n = strlen(msg);
-        char digits[8];
-        int d = 0;
-        int v = sig;
-        do {
-            digits[d++] = static_cast<char>('0' + v % 10);
-            v /= 10;
-        } while (v > 0 && d < 7);
-        while (d > 0) {
-            msg[n++] = digits[--d];
+        putHex(fd, "signal ", static_cast<uint64_t>(sig));
+        putHex(fd, "slide ", static_cast<uint64_t>(_dyld_get_image_vmaddr_slide(0)));
+        putHex(fd, "fault ", reinterpret_cast<uint64_t>(info->si_addr));
+        _STRUCT_MCONTEXT64* mc = static_cast<ucontext_t*>(uc)->uc_mcontext;
+        putHex(fd, "pc ", arm_thread_state64_get_pc(mc->__ss));
+        putHex(fd, "lr ", arm_thread_state64_get_lr(mc->__ss));
+        putHex(fd, "sp ", arm_thread_state64_get_sp(mc->__ss));
+        putHex(fd, "fp ", arm_thread_state64_get_fp(mc->__ss));
+        uint64_t* fp = reinterpret_cast<uint64_t*>(arm_thread_state64_get_fp(mc->__ss));
+        for (int i = 0; i < 40 && fp && (reinterpret_cast<uintptr_t>(fp) & 7) == 0; ++i) {
+            putHex(fd, "frame ", ptrauth_strip(fp[1], ptrauth_key_return_address));
+            uint64_t* next = reinterpret_cast<uint64_t*>(fp[0]);
+            if (next <= fp) break;
+            fp = next;
         }
-        msg[n++] = '\n';
-        write(fd, msg, n);
-        void* frames[64];
-        const int count = backtrace(frames, 64);
-        backtrace_symbols_fd(frames, count, fd);
         close(fd);
     }
     signal(sig, SIG_DFL);
@@ -96,8 +109,6 @@ void deckxIosInstallCrashHandler() {
     }
     memcpy(s_crashPath, path.c_str(), path.size() + 1);
 
-    void* prime[4];
-    backtrace(prime, 4); // load unwinder now, not inside the handler
 
     static char s_altStack[64 * 1024];
     stack_t ss;
@@ -108,8 +119,8 @@ void deckxIosInstallCrashHandler() {
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = crashHandler;
-    sa.sa_flags = SA_ONSTACK | SA_RESETHAND;
+    sa.sa_sigaction = crashHandler;
+    sa.sa_flags = SA_ONSTACK | SA_RESETHAND | SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP}) {
         sigaction(sig, &sa, nullptr);
