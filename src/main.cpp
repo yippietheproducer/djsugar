@@ -503,6 +503,7 @@ int main(int argc, char* argv[]) {
 
     // deckx: iOS-only dev switches (<Documents>/deckx-args.txt) and crash log
     deckxIosInstallCrashHandler();
+    deckxIosInstallLifecycleLog();
     deckxIosAppendArgs(&argc, &argv);
 
     // Construct a list of strings based on the command line arguments

@@ -13,9 +13,13 @@ void deckxIosAppendArgs(int* pArgc, char*** pArgv);
 /// Writes signal + backtrace_symbols_fd to <Documents>/deckx-crash.txt on a
 /// fatal signal.
 void deckxIosInstallCrashHandler();
+/// Writes <Documents>/deckx-life.txt (events) and deckx-hb.txt (1 Hz heartbeat) to explain silent deaths.
+void deckxIosInstallLifecycleLog();
 #else
 inline void deckxIosAppendArgs(int*, char***) {
 }
 inline void deckxIosInstallCrashHandler() {
+}
+inline void deckxIosInstallLifecycleLog() {
 }
 #endif

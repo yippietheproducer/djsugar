@@ -3,8 +3,13 @@
 #if TARGET_OS_IOS
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 
 #include <execinfo.h>
+#include <mach/mach.h>
+#include <pthread.h>
+#include <time.h>
+#include <atomic>
 #include <mach-o/dyld.h>
 #include <ptrauth.h>
 #include <sys/ucontext.h>
@@ -87,6 +92,58 @@ void crashHandler(int sig, siginfo_t* info, void* uc) {
     raise(sig);
 }
 
+
+// ---- lifecycle / heartbeat log (why does the process vanish without a crash file?) ----
+// <Documents>/deckx-life.txt  : appended event lines (UIApplication notifications, atexit)
+// <Documents>/deckx-hb.txt    : overwritten once per second: wall time, seconds since the main queue last ticked,
+//                               UIApplication state (0 active,1 inactive,2 background), phys_footprint MB.
+// Last heartbeat after a death = when it happened and whether the main thread was stuck / app backgrounded.
+std::string s_lifePath, s_hbPath;
+std::atomic<int> s_appState{-1};
+std::atomic<long long> s_mainTickMs{0};
+
+long long nowMs() {
+    timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+}
+
+void lifeLine(const char* what) {
+    if (s_lifePath.empty()) return;
+    int fd = open(s_lifePath.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) return;
+    char buf[160];
+    int n = snprintf(buf, sizeof buf, "%lld %s state=%d\n", nowMs(), what, s_appState.load());
+    write(fd, buf, n);
+    close(fd);
+}
+
+void* heartbeatMain(void*) {
+    for (;;) {
+        task_vm_info_data_t vi;
+        mach_msg_type_number_t cnt = TASK_VM_INFO_COUNT;
+        long long mb = -1;
+        if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vi), &cnt) == KERN_SUCCESS) {
+            mb = static_cast<long long>(vi.phys_footprint >> 20);
+        }
+        const long long now = nowMs();
+        char buf[160];
+        int n = snprintf(buf, sizeof buf, "t=%lld main_age_ms=%lld state=%d footprint_mb=%lld\n", now,
+                s_mainTickMs.load() ? now - s_mainTickMs.load() : -1, s_appState.load(), mb);
+        int fd = open(s_hbPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) {
+            write(fd, buf, n);
+            close(fd);
+        }
+        sleep(1);
+    }
+    return nullptr;
+}
+
+void atexitHook() {
+    lifeLine("atexit (exit() or return from main)");
+}
+
 } // namespace
 
 void deckxIosAppendArgs(int* pArgc, char*** pArgv) {
@@ -140,9 +197,47 @@ void deckxIosInstallCrashHandler() {
     sa.sa_sigaction = crashHandler;
     sa.sa_flags = SA_ONSTACK | SA_RESETHAND | SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
-    for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP}) {
+    for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE, SIGTRAP, SIGTERM, SIGQUIT}) {
         sigaction(sig, &sa, nullptr);
     }
+}
+
+void deckxIosInstallLifecycleLog() {
+    const std::string dir = documentsDir();
+    if (dir.empty()) return;
+    s_lifePath = dir + "/deckx-life.txt";
+    s_hbPath = dir + "/deckx-hb.txt";
+    unlink(s_lifePath.c_str());
+    lifeLine("start");
+    atexit(atexitHook);
+    NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+    struct Ev { NSNotificationName name; const char* label; };
+    static const Ev evs[] = {
+        {UIApplicationDidBecomeActiveNotification, "didBecomeActive"},
+        {UIApplicationWillResignActiveNotification, "willResignActive"},
+        {UIApplicationDidEnterBackgroundNotification, "didEnterBackground"},
+        {UIApplicationWillEnterForegroundNotification, "willEnterForeground"},
+        {UIApplicationWillTerminateNotification, "willTerminate"},
+        {UIApplicationDidReceiveMemoryWarningNotification, "memoryWarning"},
+    };
+    for (const Ev& e : evs) {
+        const char* label = e.label;
+        [nc addObserverForName:e.name object:nil queue:nil usingBlock:^(NSNotification*) {
+            lifeLine(label);
+        }];
+    }
+    // main-queue tick: proves the main thread is responsive and samples the UIApplication state
+    dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, 0), NSEC_PER_SEC, NSEC_PER_SEC / 10);
+    dispatch_source_set_event_handler(t, ^{
+        s_mainTickMs.store(nowMs());
+        UIApplication* app = UIApplication.sharedApplication;
+        if (app) s_appState.store(static_cast<int>(app.applicationState));
+    });
+    dispatch_resume(t);
+    pthread_t th;
+    pthread_create(&th, nullptr, heartbeatMain, nullptr);
+    pthread_detach(th);
 }
 
 #endif // TARGET_OS_IOS
