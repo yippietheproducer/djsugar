@@ -72,6 +72,9 @@ jobs:
           ccache --zero-stats
           ccache --max-size=2G
 
+      - name: "Create build directory"
+        run: mkdir build
+
       - name: "Configure"
         run: >-
           cmake ${{ env.CMAKE_ARGS_EXTRA }}
