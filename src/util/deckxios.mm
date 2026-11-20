@@ -63,6 +63,24 @@ void crashHandler(int sig, siginfo_t* info, void* uc) {
             if (next <= fp) break;
             fp = next;
         }
+        // frame-pointer chain is useless in -fomit-frame-pointer code: also dump the main image's real
+        // load address (image 0 is not it on this device), x0..x28 and a raw stack window. Offline: keep
+        // words inside [exe, exe+__TEXT size) whose previous instruction is bl/blr = poor man's backtrace.
+        for (uint32_t i = 0; i < _dyld_image_count(); ++i) {
+            const mach_header* h = _dyld_get_image_header(i);
+            if (h && h->filetype == MH_EXECUTE) {
+                putHex(fd, "exe ", reinterpret_cast<uint64_t>(h));
+                break;
+            }
+        }
+        for (int i = 0; i < 29; ++i) {
+            char tag[8] = {'x', static_cast<char>('0' + i / 10), static_cast<char>('0' + i % 10), ' ', 0};
+            putHex(fd, tag, mc->__ss.__x[i]);
+        }
+        const uint64_t* sp = reinterpret_cast<const uint64_t*>(arm_thread_state64_get_sp(mc->__ss));
+        for (int i = 0; i < 768 && (reinterpret_cast<uintptr_t>(sp) & 7) == 0; ++i) {
+            putHex(fd, "stk ", ptrauth_strip(sp[i], ptrauth_key_return_address));
+        }
         close(fd);
     }
     signal(sig, SIG_DFL);
