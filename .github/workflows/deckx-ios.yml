@@ -1,0 +1,159 @@
+name: deckx iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [deckx]
+
+permissions:
+  contents: read
+  actions: write # delete outdated ccache caches (gh cache delete)
+
+jobs:
+  ios:
+    name: iOS arm64
+    runs-on: macos-15-intel
+    env:
+      BUILDENV_BASEPATH: /Users/runner/buildenv
+      BUILDENV_SCRIPT: tools/ios_buildenv.sh
+      CCACHE_ID: ios-arm64
+      OS_LABEL: macos-15-intel
+    steps:
+      - name: "Check out repository"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Fetch full history for git describe"
+        run: |
+          git fetch origin --force --no-tags --unshallow || git fetch origin --force --no-tags --depth=100
+
+      - name: "[macOS] Set up cmake"
+        run: |
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          cmake --version
+
+      - name: "[macOS] install ccache and make"
+        run: |
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          export HOMEBREW_NO_REQUIRE_TAP_TRUST=1
+          brew install ccache
+
+      - name: "Get build environment name"
+        run: ${{ env.BUILDENV_SCRIPT }} name
+        env:
+          BUILDENV_RELEASE: TRUE
+
+      - name: "Restore build environment cache"
+        uses: actions/cache@v6
+        env:
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: 3
+        with:
+          path: ${{ env.BUILDENV_BASEPATH }}
+          key: buildenv-${{ env.OS_LABEL }}-${{ env.CCACHE_ID }}-${{ env.BUILDENV_NAME }}
+
+      - name: "Set up build environment"
+        run: ${{ env.BUILDENV_SCRIPT }} setup
+        env:
+          BUILDENV_BASEPATH: ${{ env.BUILDENV_BASEPATH }}
+
+      - name: "Restore ccache cache"
+        id: ccache_cache
+        uses: actions/cache/restore@v6
+        with:
+          path: /Users/runner/Library/Caches/ccache
+          key: ${{ env.OS_LABEL }}-${{ env.CCACHE_ID }}-deckx-${{ env.BUILDENV_NAME || 'system' }}-${{ hashFiles('src/**', 'CMakeLists.txt', 'cmake/**') }}
+          restore-keys: |
+            ${{ env.OS_LABEL }}-${{ env.CCACHE_ID }}-deckx
+            ${{ env.OS_LABEL }}-${{ env.CCACHE_ID }}
+
+      - name: "Set up ccache"
+        run: |
+          ccache --zero-stats
+          ccache --max-size=2G
+
+      - name: "Configure"
+        run: >-
+          cmake ${{ env.CMAKE_ARGS_EXTRA }}
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_PREFIX_PATH="${{ env.CMAKE_PREFIX_PATH }}"
+          -DWARNINGS_FATAL=ON
+          -DDEBUG_ASSERTIONS_FATAL=OFF
+          -DBATTERY=ON
+          -DBROADCAST=ON
+          -DDOWNLOAD_MANUAL=ON
+          -DHID=ON
+          -DKEYFINDER=ON
+          -DLILV=ON
+          -DOPUS=ON
+          -DQTKEYCHAIN=ON
+          -DVINYLCONTROL=ON
+          -DCMAKE_VERBOSE_MAKEFILE=OFF
+          -DQT6=ON
+          -DQML=ON
+          -DHID=OFF
+          -DBULK=OFF
+          -DNETWORKAUTH=ON
+          -DFFMPEG=ON
+          -DLOCALECOMPARE=OFF
+          -DBROADCAST=OFF
+          -DLILV=OFF
+          -DVINYLCONTROL=OFF
+          -DMAD=OFF
+          -DMODPLUG=OFF
+          -DWAVPACK=OFF
+          -DSTEM=ON
+          -DENGINEPRIME=OFF
+          -DKEYFINDER=OFF
+          -DRUBBERBAND=OFF
+          -DQTKEYCHAIN=OFF
+          -DPORTMIDI=OFF
+          -DBATTERY=OFF
+          -DNDEBUG=ON
+          -DBUILD_TESTING=OFF
+          -DBUILD_BENCH=OFF
+          -DCMAKE_SYSTEM_NAME=iOS
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
+          -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+          -DVCPKG_TARGET_TRIPLET=arm64-ios-release
+          -DVCPKG_DEFAULT_HOST_TRIPLET=x64-osx-min1100-release
+          -DQT_HOST_PATH="$QT_HOST_PATH"
+          -L
+          ..
+        working-directory: build
+
+      - name: "Set up clang problem matcher"
+        run: echo "::add-matcher::.github/gcc-matcher.json"
+
+      - name: "Build"
+        run: cmake --build . --config RelWithDebInfo
+        working-directory: build
+
+      - name: "Print compiler cache stats"
+        run: |
+          ccache --show-stats
+          ccache --cleanup
+
+      - name: "Save ccache cache"
+        id: ccache_save
+        if: steps.ccache_cache.outputs.cache-hit != 'true' && github.event_name == 'push' && github.ref_type == 'branch'
+        uses: actions/cache/save@v6
+        with:
+          path: /Users/runner/Library/Caches/ccache
+          key: ${{ steps.ccache_cache.outputs.cache-primary-key }}
+
+      - name: "Package unsigned IPA"
+        run: |
+          APP=$(find build -maxdepth 3 -name "*.app" -type d | head -1)
+          test -n "$APP" || { echo "no .app bundle"; exit 1; }
+          rm -rf build/ipa && mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          (cd build/ipa && zip -qry "../djsugar-$(git describe --always)-ios-arm64.ipa" Payload)
+          ls -lh build/*.ipa
+
+      - name: "Upload unsigned IPA"
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-ipa-unsigned
+          path: build/*.ipa
