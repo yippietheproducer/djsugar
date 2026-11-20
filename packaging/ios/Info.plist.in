@@ -49,6 +49,11 @@
     <key>NSAppleMusicUsageDescription</key>
     <string>Mixxx accesses the Apple Music library to presents its tracks and playlists in the library.</string>
 
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+    </array>
+
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>

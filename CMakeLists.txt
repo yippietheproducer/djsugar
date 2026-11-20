@@ -2323,7 +2323,10 @@ if(APPLE)
   if(IOS)
     target_sources(
       mixxx-lib
-      PRIVATE src/soundio/soundmanagerios.mm src/util/screensaverios.mm
+      PRIVATE
+        src/soundio/soundmanagerios.mm
+        src/util/screensaverios.mm
+        src/util/deckxios.mm
     )
 
     option(IOS_ITUNES_LIBRARY "Native iOS music library integration" ON)

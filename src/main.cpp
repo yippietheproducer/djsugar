@@ -19,6 +19,7 @@
 #include <memory>
 #include <stdexcept>
 
+#include "util/deckxios.h"
 #include "config.h"
 #include "controllers/controllermanager.h"
 #include "coreservices.h"
@@ -499,6 +500,10 @@ int main(int argc, char* argv[]) {
 
     QCoreApplication::setApplicationName(VersionStore::applicationName());
     QCoreApplication::setApplicationVersion(VersionStore::version());
+
+    // deckx: iOS-only dev switches (<Documents>/deckx-args.txt) and crash log
+    deckxIosInstallCrashHandler();
+    deckxIosAppendArgs(&argc, &argv);
 
     // Construct a list of strings based on the command line arguments
     CmdlineArgs& args = CmdlineArgs::Instance();
