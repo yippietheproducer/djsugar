@@ -2329,6 +2329,19 @@ if(APPLE)
         src/util/deckxios.mm
     )
 
+    # deckx: CoreMIDI controllers over the deckx_midi module (tools/host-sync
+    # copies it to lib/deckx/midi)
+    target_sources(
+      mixxx-lib
+      PRIVATE
+        lib/deckx/midi/src/deckx_midi_coremidi.mm
+        src/controllers/midi/coremidicontroller.mm
+        src/controllers/midi/coremidienumerator.mm
+    )
+    target_include_directories(mixxx-lib PUBLIC lib/deckx/midi/include)
+    target_link_libraries(mixxx-lib PRIVATE "-weak_framework CoreMIDI")
+    target_compile_definitions(mixxx-lib PUBLIC __IOS_MIDI__)
+
     option(IOS_ITUNES_LIBRARY "Native iOS music library integration" ON)
     if(IOS_ITUNES_LIBRARY)
       target_sources(

@@ -26,6 +26,10 @@
 #include "controllers/midi/hss1394enumerator.h"
 #endif
 
+#ifdef __IOS_MIDI__
+#include "controllers/midi/coremidienumerator.h"
+#endif
+
 #ifdef __ANDROID_MIDI__
 #include "controllers/midi/androidmidienumerator.h"
 #endif
@@ -202,6 +206,13 @@ void ControllerManager::slotInitialize() {
 #endif
 #ifdef __ANDROID_MIDI__
         m_enumerators.push_back(std::make_unique<AndroidMidiEnumerator>());
+#endif
+#ifdef __IOS_MIDI__
+        // Hotplug: CoreMIDI notifications trigger the same debounced rescan as Android
+        m_enumerators.push_back(std::make_unique<CoreMidiEnumerator>([this]() {
+            QMetaObject::invokeMethod(
+                    this, [this]() { m_hotplugTimer.start(); }, Qt::QueuedConnection);
+        }));
 #endif
 #ifdef __BLE_MIDI__
         m_enumerators.push_back(std::make_unique<BleMidiEnumerator>(m_pConfig));
