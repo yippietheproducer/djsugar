@@ -2327,7 +2327,15 @@ if(APPLE)
         src/soundio/soundmanagerios.mm
         src/util/screensaverios.mm
         src/util/deckxios.mm
+        src/util/deckxios_ossync.cpp
     )
+    # deckx: Qt's futex code imports os_sync_* weakly (iOS 17.4+). On iOS 16 they are NULL -> pc=0 crash.
+    # src/util/deckxios_ossync.cpp defines them over __ulock_*; -u forces the archive member into the link.
+    target_link_libraries(mixxx-lib PUBLIC
+      "-Wl,-u,_os_sync_wait_on_address"
+      "-Wl,-u,_os_sync_wait_on_address_with_timeout"
+      "-Wl,-u,_os_sync_wake_by_address_any"
+      "-Wl,-u,_os_sync_wake_by_address_all")
 
     # deckx: CoreMIDI controllers over the deckx_midi module (tools/host-sync
     # copies it to lib/deckx/midi)
